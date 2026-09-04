@@ -13,3 +13,5 @@ scikit-learn
 httpx
 pytest
 openai
+streamlit
+requests
