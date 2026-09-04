@@ -86,3 +86,8 @@ class ExceptionRecord(Base):
         default=datetime.utcnow,
         onupdate=datetime.utcnow,
     )
+
+    ai_recommendation: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+    )

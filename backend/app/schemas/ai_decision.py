@@ -17,6 +17,7 @@ class AIVerificationDecision(BaseModel):
         "duplicate_settlement",
         "settlement_delay",
         "reference_mismatch",
+        "ambiguous_match",
         "insufficient_evidence",
     ]
 

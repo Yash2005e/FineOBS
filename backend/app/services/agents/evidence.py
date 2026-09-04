@@ -11,30 +11,48 @@ def build_verification_evidence(
 
     evidence = {
         "payment": {
-            "payment_id": payment["payment_id"],
-            "order_id": payment["order_id"],
-            "customer_id": payment["customer_id"],
+            "payment_id": payment[
+                "payment_id"
+            ],
+            "order_id": payment[
+                "order_id"
+            ],
+            "customer_id": payment[
+                "customer_id"
+            ],
             "amount": float(
-                payment["payment_amount"]
+                payment[
+                    "payment_amount"
+                ]
             ),
             "payment_date": str(
-                payment["payment_date"]
+                payment[
+                    "payment_date"
+                ]
             ),
             "payment_method": payment[
                 "payment_method"
             ],
         },
         "matching": {
-            "status": match_result["status"],
-            "confidence": match_result[
-                "confidence"
-            ],
-            "candidate": match_result[
+            "status": match_result.get(
+                "status"
+            ),
+            "confidence": match_result.get(
+                "confidence",
+                0.0,
+            ),
+            "margin": match_result.get(
+                "margin",
+                0.0,
+            ),
+            "candidate": match_result.get(
                 "candidate"
-            ],
-            "top_candidates": match_result[
-                "candidates"
-            ][:3],
+            ),
+            "candidates": match_result.get(
+                "candidates",
+                [],
+            )[:3],
         },
     }
 
@@ -44,37 +62,45 @@ def build_verification_evidence(
 
         evidence["discrepancy"] = {
             "type": "missing_settlement",
-            "description": (
-                "No settlement candidate "
-                "was available."
-            ),
+            "amount_difference": 0.0,
+            "settlement_delay_days": None,
         }
 
         return evidence
 
     payment_amount = float(
-        payment["payment_amount"]
+        payment[
+            "payment_amount"
+        ]
     )
 
     settlement_amount = float(
-        settlement["gross_amount"]
+        settlement[
+            "gross_amount"
+        ]
     )
 
     difference = round(
-        payment_amount - settlement_amount,
+        payment_amount
+        - settlement_amount,
         2,
     )
 
-    settlement_date = pd.Timestamp(
-        settlement["settlement_date"]
+    payment_date = pd.Timestamp(
+        payment[
+            "payment_date"
+        ]
     )
 
-    payment_date = pd.Timestamp(
-        payment["payment_date"]
+    settlement_date = pd.Timestamp(
+        settlement[
+            "settlement_date"
+        ]
     )
 
     settlement_delay = (
-        settlement_date - payment_date
+        settlement_date
+        - payment_date
     ).days
 
     evidence["settlement"] = {

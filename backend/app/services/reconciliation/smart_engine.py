@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import pandas as pd
 
+from backend.app.services.agents.controller import (
+    FinanceController,
+)
 from backend.app.services.matching.matcher import (
     SettlementMatcher,
 )
@@ -9,15 +12,31 @@ from backend.app.services.matching.matcher import (
 
 class SmartReconciliationEngine:
     """
-    Unified reconciliation engine.
+    Unified FineOBS reconciliation engine.
 
-    Strategy:
+    Workflow:
 
-    1. Try deterministic exact reconciliation.
-    2. If no exact settlement exists, use intelligent matching.
-    3. Use confidence and candidate margin to classify
+    1. Validate the referenced order.
+    2. Try deterministic exact settlement matching.
+    3. If exact matching fails, use intelligent matching.
+    4. Use confidence and candidate margin to classify
        the intelligent result.
-    4. Never silently accept weak matches.
+    5. Send REVIEW cases to the AI verification layer.
+    6. Convert AI decisions into FineOBS statuses.
+    7. Keep uncertain cases unresolved.
+
+    FineOBS statuses:
+
+        MATCHED
+        EXCEPTION
+        REVIEW
+        UNRESOLVED
+
+    Decision sources:
+
+        DETERMINISTIC
+        INTELLIGENT_MATCHING
+        AI_VERIFICATION
     """
 
     def __init__(
@@ -36,9 +55,16 @@ class SmartReconciliationEngine:
             self.settlements
         )
 
-    def _normalize_data(self) -> None:
-        """Normalize dates, identifiers and amounts."""
+        self.controller = FinanceController()
 
+    # ==================================================
+    # DATA NORMALIZATION
+    # ==================================================
+
+    def _normalize_data(self) -> None:
+        """Normalize dates, identifiers, and amounts."""
+
+        # Dates
         self.orders["order_date"] = pd.to_datetime(
             self.orders["order_date"]
         )
@@ -47,16 +73,21 @@ class SmartReconciliationEngine:
             self.payments["payment_date"]
         )
 
-        self.settlements["settlement_date"] = pd.to_datetime(
-            self.settlements["settlement_date"]
+        self.settlements["settlement_date"] = (
+            pd.to_datetime(
+                self.settlements["settlement_date"]
+            )
         )
 
+        # Numeric values
         self.orders["order_amount"] = (
-            self.orders["order_amount"].astype(float)
+            self.orders["order_amount"]
+            .astype(float)
         )
 
         self.payments["payment_amount"] = (
-            self.payments["payment_amount"].astype(float)
+            self.payments["payment_amount"]
+            .astype(float)
         )
 
         for column in [
@@ -66,17 +97,26 @@ class SmartReconciliationEngine:
             "net_amount",
         ]:
             self.settlements[column] = (
-                self.settlements[column].astype(float)
+                self.settlements[column]
+                .astype(float)
             )
 
-        for dataframe, columns in [
+        # String identifiers
+        dataframes_and_columns = [
             (
                 self.orders,
-                ["order_id", "customer_id"],
+                [
+                    "order_id",
+                    "customer_id",
+                ],
             ),
             (
                 self.payments,
-                ["payment_id", "order_id", "customer_id"],
+                [
+                    "payment_id",
+                    "order_id",
+                    "customer_id",
+                ],
             ),
             (
                 self.settlements,
@@ -87,7 +127,11 @@ class SmartReconciliationEngine:
                     "settlement_id",
                 ],
             ),
-        ]:
+        ]
+
+        for dataframe, columns in (
+            dataframes_and_columns
+        ):
             for column in columns:
                 dataframe[column] = (
                     dataframe[column]
@@ -96,12 +140,19 @@ class SmartReconciliationEngine:
                     .str.strip()
                 )
 
+    # ==================================================
+    # ORDER LOOKUP
+    # ==================================================
+
     def _find_order(
         self,
         order_id: str,
     ) -> pd.Series | None:
+        """Find the order referenced by a payment."""
+
         matches = self.orders[
-            self.orders["order_id"] == order_id
+            self.orders["order_id"]
+            == order_id
         ]
 
         if matches.empty:
@@ -109,13 +160,24 @@ class SmartReconciliationEngine:
 
         return matches.iloc[0]
 
+    # ==================================================
+    # EXACT SETTLEMENT LOOKUP
+    # ==================================================
+
     def _find_exact_settlements(
         self,
         payment_id: str,
     ) -> pd.DataFrame:
+        """Find settlements with an exact payment ID."""
+
         return self.settlements[
-            self.settlements["payment_id"] == payment_id
+            self.settlements["payment_id"]
+            == payment_id
         ]
+
+    # ==================================================
+    # VALIDATION HELPERS
+    # ==================================================
 
     @staticmethod
     def _amount_matches(
@@ -123,6 +185,8 @@ class SmartReconciliationEngine:
         settlement_amount: float,
         tolerance: float = 0.01,
     ) -> bool:
+        """Check whether payment and settlement amounts match."""
+
         return (
             abs(
                 payment_amount
@@ -137,6 +201,8 @@ class SmartReconciliationEngine:
         settlement_date: pd.Timestamp,
         maximum_days: int = 3,
     ) -> bool:
+        """Check whether settlement is within the expected window."""
+
         delay = (
             settlement_date
             - payment_date
@@ -144,13 +210,23 @@ class SmartReconciliationEngine:
 
         return delay <= maximum_days
 
+    # ==================================================
+    # BASE RESULT
+    # ==================================================
+
     @staticmethod
     def _base_result(
         payment: pd.Series,
     ) -> dict:
+        """Create the standard result structure."""
+
         return {
-            "payment_id": payment["payment_id"],
-            "order_id": payment["order_id"],
+            "payment_id": payment[
+                "payment_id"
+            ],
+            "order_id": payment[
+                "order_id"
+            ],
             "payment_amount": float(
                 payment["payment_amount"]
             ),
@@ -162,27 +238,74 @@ class SmartReconciliationEngine:
             "decision_source": None,
             "confidence": 0.0,
             "matching_margin": 0.0,
+            "ai_recommendation": None,
             "explanation": "",
         }
+
+    # ==================================================
+    # CANDIDATE SETTLEMENT LOOKUP
+    # ==================================================
+
+    def _get_candidate_settlement(
+        self,
+        candidate_id: str | None,
+    ) -> pd.Series | None:
+        """
+        Find the settlement row selected by the
+        intelligent matching engine.
+        """
+
+        if not candidate_id:
+            return None
+
+        matches = self.settlements[
+            self.settlements["settlement_id"]
+            == candidate_id
+        ]
+
+        if matches.empty:
+            return None
+
+        return matches.iloc[0]
+
+    # ==================================================
+    # SINGLE PAYMENT RECONCILIATION
+    # ==================================================
 
     def reconcile_payment(
         self,
         payment: pd.Series,
     ) -> dict:
+        """Reconcile one payment."""
 
         result = self._base_result(
             payment
         )
 
+        payment_id = payment[
+            "payment_id"
+        ]
+
+        order_id = payment[
+            "order_id"
+        ]
+
+        payment_amount = float(
+            payment[
+                "payment_amount"
+            ]
+        )
+
         # --------------------------------------------------
-        # 1. Validate order
+        # STEP 1: Validate order
         # --------------------------------------------------
 
         order = self._find_order(
-            payment["order_id"]
+            order_id
         )
 
         if order is None:
+
             result.update(
                 {
                     "status": "EXCEPTION",
@@ -199,123 +322,230 @@ class SmartReconciliationEngine:
             return result
 
         # --------------------------------------------------
-        # 2. Try exact settlement match
+        # STEP 2: Exact settlement lookup
         # --------------------------------------------------
 
         exact_settlements = (
             self._find_exact_settlements(
-                payment["payment_id"]
+                payment_id
             )
         )
 
-        # --------------------------------------------------
-        # 3. No exact settlement
-        # --------------------------------------------------
+        # ==================================================
+        # BRANCH A: NO EXACT SETTLEMENT
+        # ==================================================
 
         if exact_settlements.empty:
 
+            # Run intelligent matching.
             match_result = self.matcher.match(
                 payment
             )
 
-            result["decision_source"] = (
-                "INTELLIGENT_MATCHING"
-            )
-
-            result["confidence"] = (
-                match_result["confidence"]
-            )
-
-            result["matching_margin"] = (
-                match_result.get(
-                    "margin",
-                    0.0,
-                )
+            result.update(
+                {
+                    "decision_source": (
+                        "INTELLIGENT_MATCHING"
+                    ),
+                    "confidence": (
+                        match_result.get(
+                            "confidence",
+                            0.0,
+                        )
+                    ),
+                    "matching_margin": (
+                        match_result.get(
+                            "margin",
+                            0.0,
+                        )
+                    ),
+                }
             )
 
             candidate_id = (
-                match_result["candidate"]
+                match_result.get(
+                    "candidate"
+                )
             )
 
             result["settlement_id"] = (
                 candidate_id
             )
 
-            # High-confidence recovery
-            if (
-                match_result["status"]
-                == "HIGH_CONFIDENCE"
-                and candidate_id
-            ):
+            candidate = (
+                self._get_candidate_settlement(
+                    candidate_id
+                )
+            )
 
-                candidate_rows = self.settlements[
-                    self.settlements["settlement_id"]
-                    == candidate_id
-                ]
+            # --------------------------------------------------
+            # No candidate
+            # --------------------------------------------------
 
-                if not candidate_rows.empty:
-
-                    candidate = (
-                        candidate_rows.iloc[0]
-                    )
-
-                    settlement_amount = float(
-                        candidate["gross_amount"]
-                    )
-
-                    difference = round(
-                        float(
-                            payment["payment_amount"]
-                        )
-                        - settlement_amount,
-                        2,
-                    )
-
-                    result.update(
-                        {
-                            "status": "MATCHED",
-                            "settlement_amount": (
-                                settlement_amount
-                            ),
-                            "difference_amount": (
-                                difference
-                            ),
-                            "exception_type": "none",
-                            "explanation": (
-                                "No exact payment ID "
-                                "match was found, but "
-                                "the settlement was "
-                                "recovered using "
-                                "high-confidence "
-                                "intelligent matching."
-                            ),
-                        }
-                    )
-
-                    return result
-
-            # Medium confidence
-            if match_result["status"] == "REVIEW":
+            if candidate is None:
 
                 result.update(
                     {
-                        "status": "REVIEW",
+                        "status": "UNRESOLVED",
                         "exception_type": (
-                            "ambiguous_match"
+                            "insufficient_evidence"
                         ),
                         "explanation": (
-                            "A plausible settlement "
-                            "candidate was found, "
-                            "but the evidence is "
-                            "not strong enough for "
-                            "automatic reconciliation."
+                            "No reliable settlement "
+                            "candidate could be identified "
+                            "for this payment."
                         ),
                     }
                 )
 
                 return result
 
-            # No reliable candidate
+            # --------------------------------------------------
+            # Candidate details
+            # --------------------------------------------------
+
+            settlement_amount = float(
+                candidate[
+                    "gross_amount"
+                ]
+            )
+
+            difference = round(
+                payment_amount
+                - settlement_amount,
+                2,
+            )
+
+            result.update(
+                {
+                    "settlement_amount": (
+                        settlement_amount
+                    ),
+                    "difference_amount": (
+                        difference
+                    ),
+                }
+            )
+
+            # ==================================================
+            # HIGH-CONFIDENCE INTELLIGENT MATCH
+            # ==================================================
+
+            if (
+                match_result["status"]
+                == "HIGH_CONFIDENCE"
+            ):
+
+                # A high similarity score does not override
+                # a financial amount discrepancy.
+                if not self._amount_matches(
+                    payment_amount,
+                    settlement_amount,
+                ):
+
+                    result.update(
+                        {
+                            "status": "EXCEPTION",
+                            "exception_type": (
+                                "amount_mismatch"
+                            ),
+                            "explanation": (
+                                "A high-confidence "
+                                "candidate was found, "
+                                "but payment and "
+                                "settlement amounts "
+                                "do not reconcile."
+                            ),
+                        }
+                    )
+
+                    return result
+
+                result.update(
+                    {
+                        "status": "MATCHED",
+                        "exception_type": "none",
+                        "explanation": (
+                            "No exact payment ID "
+                            "match was available, "
+                            "but the settlement "
+                            "was recovered using "
+                            "high-confidence "
+                            "intelligent matching."
+                        ),
+                    }
+                )
+
+                return result
+
+            # ==================================================
+            # REVIEW → AI VERIFICATION
+            # ==================================================
+
+            if (
+                match_result["status"]
+                == "REVIEW"
+            ):
+
+                verification = (
+                    self.controller.verify_case(
+                        payment=payment,
+                        settlement=candidate,
+                        match_result=match_result,
+                    )
+                )
+
+                decision = verification[
+                    "decision"
+                ]
+
+                # Convert AI terminology into
+                # FineOBS status terminology.
+                decision_to_status = {
+                    "AUTO_RECONCILE": "MATCHED",
+                    "HUMAN_REVIEW": "REVIEW",
+                    "UNRESOLVED": "UNRESOLVED",
+                }
+
+                final_status = (
+                    decision_to_status.get(
+                        decision.decision,
+                        "REVIEW",
+                    )
+                )
+
+                result.update(
+                    {
+                        "status": final_status,
+
+                        "exception_type": (
+                            decision.exception_type
+                        ),
+
+                        "confidence": (
+                            decision.confidence
+                        ),
+
+                        "decision_source": (
+                            "AI_VERIFICATION"
+                        ),
+
+                        "ai_recommendation": (
+                            decision.recommended_action
+                        ),
+
+                        "explanation": (
+                            decision.explanation
+                        ),
+                    }
+                )
+
+                return result
+
+            # ==================================================
+            # UNRESOLVED
+            # ==================================================
+
             result.update(
                 {
                     "status": "UNRESOLVED",
@@ -323,18 +553,19 @@ class SmartReconciliationEngine:
                         "insufficient_evidence"
                     ),
                     "explanation": (
-                        "No sufficiently reliable "
-                        "settlement match could "
-                        "be established."
+                        "The intelligent matching "
+                        "engine could not produce "
+                        "a sufficiently reliable "
+                        "candidate."
                     ),
                 }
             )
 
             return result
 
-        # --------------------------------------------------
-        # 4. Multiple exact settlements
-        # --------------------------------------------------
+        # ==================================================
+        # BRANCH B: MULTIPLE EXACT SETTLEMENTS
+        # ==================================================
 
         if len(exact_settlements) > 1:
 
@@ -360,8 +591,10 @@ class SmartReconciliationEngine:
                         settlement_ids
                     ),
                     "explanation": (
-                        f"Multiple settlements "
-                        f"were found: "
+                        f"Multiple settlement "
+                        f"records were found "
+                        f"for payment "
+                        f"{payment_id}: "
                         f"{settlement_ids}"
                     ),
                 }
@@ -369,28 +602,36 @@ class SmartReconciliationEngine:
 
             return result
 
-        # --------------------------------------------------
-        # 5. Validate single exact settlement
-        # --------------------------------------------------
+        # ==================================================
+        # BRANCH C: ONE EXACT SETTLEMENT
+        # ==================================================
 
-        settlement = exact_settlements.iloc[0]
+        settlement = (
+            exact_settlements.iloc[0]
+        )
+
+        settlement_id = str(
+            settlement[
+                "settlement_id"
+            ]
+        )
 
         settlement_amount = float(
-            settlement["gross_amount"]
+            settlement[
+                "gross_amount"
+            ]
         )
 
         difference = round(
-            float(
-                payment["payment_amount"]
-            )
+            payment_amount
             - settlement_amount,
             2,
         )
 
         result.update(
             {
-                "settlement_id": str(
-                    settlement["settlement_id"]
+                "settlement_id": (
+                    settlement_id
                 ),
                 "settlement_amount": (
                     settlement_amount
@@ -405,11 +646,11 @@ class SmartReconciliationEngine:
         )
 
         # --------------------------------------------------
-        # 6. Amount mismatch
+        # Amount mismatch
         # --------------------------------------------------
 
         if not self._amount_matches(
-            float(payment["payment_amount"]),
+            payment_amount,
             settlement_amount,
         ):
 
@@ -431,17 +672,27 @@ class SmartReconciliationEngine:
             return result
 
         # --------------------------------------------------
-        # 7. Settlement delay
+        # Settlement delay
         # --------------------------------------------------
 
+        payment_date = payment[
+            "payment_date"
+        ]
+
+        settlement_date = (
+            settlement[
+                "settlement_date"
+            ]
+        )
+
         if not self._settlement_is_on_time(
-            payment["payment_date"],
-            settlement["settlement_date"],
+            payment_date,
+            settlement_date,
         ):
 
             delay = (
-                settlement["settlement_date"]
-                - payment["payment_date"]
+                settlement_date
+                - payment_date
             ).days
 
             result.update(
@@ -461,13 +712,14 @@ class SmartReconciliationEngine:
 
             return result
 
-        # --------------------------------------------------
-        # 8. Exact successful match
-        # --------------------------------------------------
+        # ==================================================
+        # SUCCESSFUL EXACT MATCH
+        # ==================================================
 
         result.update(
             {
                 "status": "MATCHED",
+                "exception_type": "none",
                 "confidence": 1.0,
                 "explanation": (
                     "Payment, order, and settlement "
@@ -480,7 +732,12 @@ class SmartReconciliationEngine:
 
         return result
 
+    # ==================================================
+    # FULL BATCH RECONCILIATION
+    # ==================================================
+
     def reconcile(self) -> pd.DataFrame:
+        """Reconcile every payment in the batch."""
 
         results = []
 
@@ -496,4 +753,6 @@ class SmartReconciliationEngine:
                 result
             )
 
-        return pd.DataFrame(results)
+        return pd.DataFrame(
+            results
+        )
