@@ -111,6 +111,8 @@ def generate_settlements(
             {
                 "settlement_id": f"SET_{fake.uuid4()}",
                 "payment_id": payment["payment_id"],
+                "merchant_reference": payment["order_id"],
+                "customer_id": payment["customer_id"],
                 "gross_amount": payment["payment_amount"],
                 "fee": fee,
                 "tax": tax,
@@ -122,22 +124,199 @@ def generate_settlements(
 
     return pd.DataFrame(rows)
 
+def introduce_reference_noise(
+    settlements: pd.DataFrame,
+) -> pd.DataFrame:
+
+    settlements = settlements.copy()
+
+    indices = random.sample(
+        list(settlements.index),
+        40,
+    )
+
+    for idx in indices:
+        reference = settlements.loc[
+            idx,
+            "merchant_reference",
+        ]
+
+        noise_type = random.choice(
+            [
+                "hyphen",
+                "space",
+                "lowercase",
+                "prefix",
+            ]
+        )
+
+        if noise_type == "hyphen":
+            settlements.loc[
+                idx,
+                "merchant_reference",
+            ] = reference.replace(
+                "ORD",
+                "ORD-",
+            )
+
+        elif noise_type == "space":
+            settlements.loc[
+                idx,
+                "merchant_reference",
+            ] = reference.replace(
+                "ORD",
+                "ORD ",
+            )
+
+        elif noise_type == "lowercase":
+            settlements.loc[
+                idx,
+                "merchant_reference",
+            ] = reference.lower()
+
+        elif noise_type == "prefix":
+            settlements.loc[
+                idx,
+                "merchant_reference",
+            ] = f"MER-{reference}"
+
+    return settlements    
+
+
+def introduce_payment_id_noise(
+    settlements: pd.DataFrame,
+    payments: pd.DataFrame,
+) -> pd.DataFrame:
+
+    settlements = settlements.copy()
+
+    # Only corrupt records that are currently valid.
+    indices = random.sample(
+        list(settlements.index),
+        60,
+    )
+
+    payment_ids = payments[
+        "payment_id"
+    ].tolist()
+
+    for idx in indices:
+
+        original_id = settlements.loc[
+            idx,
+            "payment_id",
+        ]
+
+        noise_type = random.choice(
+            [
+                "missing",
+                "suffix",
+                "prefix",
+                "wrong_reference",
+            ]
+        )
+
+        if noise_type == "missing":
+
+            settlements.loc[
+                idx,
+                "payment_id",
+            ] = ""
+
+        elif noise_type == "suffix":
+
+            settlements.loc[
+                idx,
+                "payment_id",
+            ] = (
+                f"{original_id}-SET"
+            )
+
+        elif noise_type == "prefix":
+
+            settlements.loc[
+                idx,
+                "payment_id",
+            ] = (
+                f"settle-{original_id}"
+            )
+
+        elif noise_type == "wrong_reference":
+
+            replacement = random.choice(
+                [
+                    payment_id
+                    for payment_id in payment_ids
+                    if payment_id != original_id
+                ]
+            )
+
+            settlements.loc[
+                idx,
+                "payment_id",
+            ] = replacement
+
+    return settlements
+
+
 
 def build_ground_truth(
     payments: pd.DataFrame,
     settlements: pd.DataFrame,
 ) -> pd.DataFrame:
-    return pd.DataFrame(
-        {
-            "payment_id": payments["payment_id"],
-            "expected_order_id": payments["order_id"],
-            "expected_settlement_exists": payments[
-                "payment_id"
-            ].isin(settlements["payment_id"]),
-            "true_status": "matched",
-            "exception_type": "none",
-        }
-    )
+
+    rows = []
+
+    for _, payment in payments.iterrows():
+
+        payment_id = payment[
+            "payment_id"
+        ]
+
+        matching_settlements = settlements[
+            settlements[
+                "merchant_reference"
+            ]
+            == payment["order_id"]
+        ]
+
+        if matching_settlements.empty:
+
+            rows.append(
+                {
+                    "payment_id": payment_id,
+                    "expected_order_id": payment[
+                        "order_id"
+                    ],
+                    "expected_settlement_id": None,
+                    "true_status": "exception",
+                    "exception_type": "missing_settlement",
+                    "expected_resolution": "human_review",
+                }
+            )
+
+        else:
+
+            settlement = (
+                matching_settlements.iloc[0]
+            )
+
+            rows.append(
+                {
+                    "payment_id": payment_id,
+                    "expected_order_id": payment[
+                        "order_id"
+                    ],
+                    "expected_settlement_id": settlement[
+                        "settlement_id"
+                    ],
+                    "true_status": "matched",
+                    "exception_type": "none",
+                    "expected_resolution": "auto_reconcile",
+                }
+            )
+
+    return pd.DataFrame(rows)
 
 
 def inject_exceptions(
@@ -284,7 +463,18 @@ def main() -> None:
 
     payments = generate_payments(orders)
 
-    settlements = generate_settlements(payments)
+    settlements = generate_settlements(
+        payments
+    )
+
+    settlements = introduce_reference_noise(
+        settlements
+    )
+
+    settlements = introduce_payment_id_noise(
+        settlements,
+        payments,
+    )
 
     ground_truth = build_ground_truth(
         payments,

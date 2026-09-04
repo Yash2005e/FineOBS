@@ -12,3 +12,4 @@ rapidfuzz
 scikit-learn
 httpx
 pytest
+openai

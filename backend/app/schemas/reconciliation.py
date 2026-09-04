@@ -1,18 +1,33 @@
+from typing import Any
+
 from pydantic import BaseModel
-from typing import Optional
 
 
-class ReconciliationResult(BaseModel):
-    payment_id: str
-    order_id: Optional[str] = None
-    settlement_id: Optional[str] = None
+class ReconciliationRequest(BaseModel):
+    batch_name: str = "default_batch"
 
-    status: str
-    exception_type: str
 
-    payment_amount: float
-    settlement_amount: Optional[float] = None
-    difference_amount: Optional[float] = None
+class ReconciliationResponse(BaseModel):
+    batch_id: str
+    batch_name: str
 
-    confidence: float
-    explanation: str
+    total_records: int
+    matched_records: int
+    exception_records: int
+    review_records: int
+    unresolved_records: int
+
+    match_rate: float
+    review_rate: float
+    unresolved_rate: float
+    exception_rate: float
+
+    decision_source: dict[str, int]
+    exception_distribution: dict[str, int]
+
+    processing_time_seconds: float
+    throughput_records_per_second: float
+
+    new_exceptions_created: int
+
+    results_file: str
