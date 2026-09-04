@@ -1,0 +1,76 @@
+{
+  "batch_id": "BATCH-FD613A2A",
+  "batch_name": "fineobs_demo_batch",
+  "dataset": {
+    "orders": 500,
+    "payments": 500,
+    "settlements": 491,
+    "ground_truth_records": 500
+  },
+  "operational_metrics": {
+    "total_records": 500,
+    "matched_records": 416,
+    "exception_records": 50,
+    "review_records": 4,
+    "unresolved_records": 30,
+    "match_rate": 83.2,
+    "review_rate": 0.8,
+    "unresolved_rate": 6.0,
+    "exception_rate": 10.0,
+    "decision_source": {
+      "DETERMINISTIC": 414,
+      "INTELLIGENT_MATCHING": 82,
+      "AI_VERIFICATION": 4
+    },
+    "exception_distribution": {
+      "duplicate_settlement": 32,
+      "insufficient_evidence": 30,
+      "settlement_delay": 16,
+      "ambiguous_match": 4,
+      "amount_mismatch": 2
+    }
+  },
+  "evaluation_metrics": {
+    "total_records": 500,
+    "matched_records": 416,
+    "exception_records": 50,
+    "review_records": 4,
+    "unresolved_records": 30,
+    "match_rate": 83.2,
+    "exception_rate": 10.0,
+    "review_rate": 0.8,
+    "unresolved_rate": 6.0,
+    "precision": 82.93,
+    "recall": 96.37,
+    "f1_score": 89.15,
+    "correctly_reconciled": 345,
+    "incorrect_reconciliations": 71,
+    "exception_detection": {
+      "amount_mismatch": {
+        "actual": 37,
+        "correctly_detected": 0,
+        "detection_rate": 0.0
+      },
+      "duplicate_settlement": {
+        "actual": 20,
+        "correctly_detected": 19,
+        "detection_rate": 95.0
+      },
+      "missing_settlement": {
+        "actual": 67,
+        "correctly_detected": 0,
+        "detection_rate": 0.0
+      },
+      "settlement_delay": {
+        "actual": 18,
+        "correctly_detected": 16,
+        "detection_rate": 88.89
+      }
+    }
+  },
+  "performance": {
+    "processing_time_seconds": 4.9075,
+    "throughput_records_per_second": 101.89
+  },
+  "exceptions_created": 0
+}
