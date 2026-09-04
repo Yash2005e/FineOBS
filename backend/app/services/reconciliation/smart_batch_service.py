@@ -30,10 +30,6 @@ GROUND_TRUTH_DIR = ROOT / "data" / "ground_truth"
 
 
 class SmartBatchReconciliationService:
-    """
-    Orchestrates the complete FineOBS smart
-    reconciliation workflow for a batch.
-    """
 
     def run(
         self,
@@ -43,9 +39,9 @@ class SmartBatchReconciliationService:
 
         start_time = time.perf_counter()
 
-        # --------------------------------------------------
-        # 1. Load input datasets
-        # --------------------------------------------------
+        # ---------------------------------------------
+        # 1. Load benchmark data
+        # ---------------------------------------------
 
         orders = pd.read_csv(
             DATA_DIR / "orders.csv"
@@ -63,9 +59,9 @@ class SmartBatchReconciliationService:
             GROUND_TRUTH_DIR / "ground_truth.csv"
         )
 
-        # --------------------------------------------------
+        # ---------------------------------------------
         # 2. Run smart reconciliation
-        # --------------------------------------------------
+        # ---------------------------------------------
 
         engine = SmartReconciliationEngine(
             orders=orders,
@@ -75,26 +71,26 @@ class SmartBatchReconciliationService:
 
         results = engine.reconcile()
 
-        # --------------------------------------------------
-        # 3. Calculate operational metrics
-        # --------------------------------------------------
+        # ---------------------------------------------
+        # 3. Operational metrics
+        # ---------------------------------------------
 
         metrics = calculate_smart_metrics(
             results
         )
 
-        # --------------------------------------------------
-        # 4. Evaluate against ground truth
-        # --------------------------------------------------
+        # ---------------------------------------------
+        # 4. Ground-truth evaluation
+        # ---------------------------------------------
 
         evaluation = evaluate_results(
             results=results,
             ground_truth=ground_truth,
         )
 
-        # --------------------------------------------------
-        # 5. Calculate processing performance
-        # --------------------------------------------------
+        # ---------------------------------------------
+        # 5. Performance
+        # ---------------------------------------------
 
         elapsed = (
             time.perf_counter()
@@ -107,17 +103,17 @@ class SmartBatchReconciliationService:
             else 0.0
         )
 
-        # --------------------------------------------------
-        # 6. Create batch ID
-        # --------------------------------------------------
+        # ---------------------------------------------
+        # 6. Batch ID
+        # ---------------------------------------------
 
         batch_id = (
             f"BATCH-{uuid.uuid4().hex[:8].upper()}"
         )
 
-        # --------------------------------------------------
-        # 7. Save reconciliation results
-        # --------------------------------------------------
+        # ---------------------------------------------
+        # 7. Save detailed results
+        # ---------------------------------------------
 
         output_path = (
             DATA_DIR
@@ -129,9 +125,9 @@ class SmartBatchReconciliationService:
             index=False,
         )
 
-        # --------------------------------------------------
-        # 8. Persist exceptions
-        # --------------------------------------------------
+        # ---------------------------------------------
+        # 8. Persist exception/review cases
+        # ---------------------------------------------
 
         existing_payment_ids = {
             payment_id
@@ -144,7 +140,11 @@ class SmartBatchReconciliationService:
 
         for _, row in results.iterrows():
 
-            if row["status"] not in {
+            status = str(
+                row["status"]
+            )
+
+            if status not in {
                 "EXCEPTION",
                 "REVIEW",
                 "UNRESOLVED",
@@ -155,7 +155,6 @@ class SmartBatchReconciliationService:
                 row["payment_id"]
             )
 
-            # Prevent duplicate exception records.
             if payment_id in existing_payment_ids:
                 continue
 
@@ -179,36 +178,28 @@ class SmartBatchReconciliationService:
                     row["exception_type"]
                 ),
                 payment_amount=(
-                    float(
-                        row["payment_amount"]
-                    )
+                    float(row["payment_amount"])
                     if pd.notna(
                         row["payment_amount"]
                     )
                     else None
                 ),
                 settlement_amount=(
-                    float(
-                        row["settlement_amount"]
-                    )
+                    float(row["settlement_amount"])
                     if pd.notna(
                         row["settlement_amount"]
                     )
                     else None
                 ),
                 difference_amount=(
-                    float(
-                        row["difference_amount"]
-                    )
+                    float(row["difference_amount"])
                     if pd.notna(
                         row["difference_amount"]
                     )
                     else None
                 ),
                 confidence=(
-                    float(
-                        row["confidence"]
-                    )
+                    float(row["confidence"])
                     if pd.notna(
                         row["confidence"]
                     )
@@ -223,7 +214,6 @@ class SmartBatchReconciliationService:
             db.add(exception)
             db.flush()
 
-            # Record creation in audit trail.
             create_audit_log(
                 db,
                 entity_type="EXCEPTION",
@@ -235,9 +225,8 @@ class SmartBatchReconciliationService:
                 new_status="OPEN",
                 actor="SYSTEM",
                 comment=(
-                    f"Created by smart "
-                    f"reconciliation batch "
-                    f"{batch_id}."
+                    f"Created during smart "
+                    f"batch {batch_id}."
                 ),
             )
 
@@ -247,15 +236,11 @@ class SmartBatchReconciliationService:
 
             created += 1
 
-        # --------------------------------------------------
-        # 9. Commit database changes
-        # --------------------------------------------------
-
         db.commit()
 
-        # --------------------------------------------------
-        # 10. Save evaluation report
-        # --------------------------------------------------
+        # ---------------------------------------------
+        # 9. Save evaluation report
+        # ---------------------------------------------
 
         evaluation_path = (
             DATA_DIR
@@ -270,17 +255,17 @@ class SmartBatchReconciliationService:
 
             json.dump(
                 {
-                    **evaluation,
                     "batch_id": batch_id,
                     "batch_name": batch_name,
+                    **evaluation,
                 },
                 file,
                 indent=2,
             )
 
-        # --------------------------------------------------
-        # 11. Build final API response
-        # --------------------------------------------------
+        # ---------------------------------------------
+        # 10. Final response
+        # ---------------------------------------------
 
         return {
             "batch_id": batch_id,
@@ -364,5 +349,9 @@ class SmartBatchReconciliationService:
 
             "results_file": str(
                 output_path
+            ),
+
+            "evaluation_file": str(
+                evaluation_path
             ),
         }

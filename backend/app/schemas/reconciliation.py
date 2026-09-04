@@ -1,5 +1,3 @@
-from typing import Any
-
 from pydantic import BaseModel
 
 
@@ -31,7 +29,6 @@ class ReconciliationResponse(BaseModel):
     incorrect_reconciliations: int
 
     decision_source: dict[str, int]
-
     exception_distribution: dict[str, int]
 
     processing_time_seconds: float
@@ -40,3 +37,4 @@ class ReconciliationResponse(BaseModel):
     new_exceptions_created: int
 
     results_file: str
+    evaluation_file: str
