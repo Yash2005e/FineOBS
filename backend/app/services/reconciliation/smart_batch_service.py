@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import time
 import uuid
 from pathlib import Path
@@ -14,6 +15,9 @@ from backend.app.services.reconciliation.smart_engine import (
 from backend.app.services.reporting.audit import (
     create_audit_log,
 )
+from backend.app.services.reporting.integrated_evaluation import (
+    evaluate_results,
+)
 from backend.app.services.reporting.smart_metrics import (
     calculate_smart_metrics,
 )
@@ -22,9 +26,14 @@ from backend.app.services.reporting.smart_metrics import (
 ROOT = Path(__file__).resolve().parents[4]
 
 DATA_DIR = ROOT / "data" / "generated"
+GROUND_TRUTH_DIR = ROOT / "data" / "ground_truth"
 
 
 class SmartBatchReconciliationService:
+    """
+    Orchestrates the complete FineOBS smart
+    reconciliation workflow for a batch.
+    """
 
     def run(
         self,
@@ -33,6 +42,10 @@ class SmartBatchReconciliationService:
     ) -> dict:
 
         start_time = time.perf_counter()
+
+        # --------------------------------------------------
+        # 1. Load input datasets
+        # --------------------------------------------------
 
         orders = pd.read_csv(
             DATA_DIR / "orders.csv"
@@ -46,6 +59,14 @@ class SmartBatchReconciliationService:
             DATA_DIR / "settlements.csv"
         )
 
+        ground_truth = pd.read_csv(
+            GROUND_TRUTH_DIR / "ground_truth.csv"
+        )
+
+        # --------------------------------------------------
+        # 2. Run smart reconciliation
+        # --------------------------------------------------
+
         engine = SmartReconciliationEngine(
             orders=orders,
             payments=payments,
@@ -54,9 +75,26 @@ class SmartBatchReconciliationService:
 
         results = engine.reconcile()
 
+        # --------------------------------------------------
+        # 3. Calculate operational metrics
+        # --------------------------------------------------
+
         metrics = calculate_smart_metrics(
             results
         )
+
+        # --------------------------------------------------
+        # 4. Evaluate against ground truth
+        # --------------------------------------------------
+
+        evaluation = evaluate_results(
+            results=results,
+            ground_truth=ground_truth,
+        )
+
+        # --------------------------------------------------
+        # 5. Calculate processing performance
+        # --------------------------------------------------
 
         elapsed = (
             time.perf_counter()
@@ -69,9 +107,17 @@ class SmartBatchReconciliationService:
             else 0.0
         )
 
+        # --------------------------------------------------
+        # 6. Create batch ID
+        # --------------------------------------------------
+
         batch_id = (
             f"BATCH-{uuid.uuid4().hex[:8].upper()}"
         )
+
+        # --------------------------------------------------
+        # 7. Save reconciliation results
+        # --------------------------------------------------
 
         output_path = (
             DATA_DIR
@@ -84,7 +130,7 @@ class SmartBatchReconciliationService:
         )
 
         # --------------------------------------------------
-        # Persist exceptions and review cases
+        # 8. Persist exceptions
         # --------------------------------------------------
 
         existing_payment_ids = {
@@ -109,6 +155,7 @@ class SmartBatchReconciliationService:
                 row["payment_id"]
             )
 
+            # Prevent duplicate exception records.
             if payment_id in existing_payment_ids:
                 continue
 
@@ -122,9 +169,7 @@ class SmartBatchReconciliationService:
                     else None
                 ),
                 settlement_id=(
-                    str(
-                        row["settlement_id"]
-                    )
+                    str(row["settlement_id"])
                     if pd.notna(
                         row["settlement_id"]
                     )
@@ -178,6 +223,7 @@ class SmartBatchReconciliationService:
             db.add(exception)
             db.flush()
 
+            # Record creation in audit trail.
             create_audit_log(
                 db,
                 entity_type="EXCEPTION",
@@ -201,13 +247,108 @@ class SmartBatchReconciliationService:
 
             created += 1
 
+        # --------------------------------------------------
+        # 9. Commit database changes
+        # --------------------------------------------------
+
         db.commit()
+
+        # --------------------------------------------------
+        # 10. Save evaluation report
+        # --------------------------------------------------
+
+        evaluation_path = (
+            DATA_DIR
+            / f"{batch_id}_evaluation.json"
+        )
+
+        with open(
+            evaluation_path,
+            "w",
+            encoding="utf-8",
+        ) as file:
+
+            json.dump(
+                {
+                    **evaluation,
+                    "batch_id": batch_id,
+                    "batch_name": batch_name,
+                },
+                file,
+                indent=2,
+            )
+
+        # --------------------------------------------------
+        # 11. Build final API response
+        # --------------------------------------------------
 
         return {
             "batch_id": batch_id,
             "batch_name": batch_name,
 
-            **metrics,
+            "total_records": metrics[
+                "total_records"
+            ],
+
+            "matched_records": metrics[
+                "matched_records"
+            ],
+
+            "exception_records": metrics[
+                "exception_records"
+            ],
+
+            "review_records": metrics[
+                "review_records"
+            ],
+
+            "unresolved_records": metrics[
+                "unresolved_records"
+            ],
+
+            "match_rate": metrics[
+                "match_rate"
+            ],
+
+            "exception_rate": metrics[
+                "exception_rate"
+            ],
+
+            "review_rate": metrics[
+                "review_rate"
+            ],
+
+            "unresolved_rate": metrics[
+                "unresolved_rate"
+            ],
+
+            "precision": evaluation[
+                "precision"
+            ],
+
+            "recall": evaluation[
+                "recall"
+            ],
+
+            "f1_score": evaluation[
+                "f1_score"
+            ],
+
+            "correctly_reconciled": evaluation[
+                "correctly_reconciled"
+            ],
+
+            "incorrect_reconciliations": evaluation[
+                "incorrect_reconciliations"
+            ],
+
+            "decision_source": metrics[
+                "decision_source"
+            ],
+
+            "exception_distribution": metrics[
+                "exception_distribution"
+            ],
 
             "processing_time_seconds": round(
                 elapsed,

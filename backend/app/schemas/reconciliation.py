@@ -12,17 +12,26 @@ class ReconciliationResponse(BaseModel):
     batch_name: str
 
     total_records: int
+
     matched_records: int
     exception_records: int
     review_records: int
     unresolved_records: int
 
     match_rate: float
+    exception_rate: float
     review_rate: float
     unresolved_rate: float
-    exception_rate: float
+
+    precision: float
+    recall: float
+    f1_score: float
+
+    correctly_reconciled: int
+    incorrect_reconciliations: int
 
     decision_source: dict[str, int]
+
     exception_distribution: dict[str, int]
 
     processing_time_seconds: float

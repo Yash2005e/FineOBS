@@ -1,0 +1,40 @@
+{
+  "total_records": 500,
+  "matched_records": 416,
+  "exception_records": 50,
+  "review_records": 4,
+  "unresolved_records": 30,
+  "match_rate": 83.2,
+  "exception_rate": 10.0,
+  "review_rate": 0.8,
+  "unresolved_rate": 6.0,
+  "precision": 82.93,
+  "recall": 96.37,
+  "f1_score": 89.15,
+  "correctly_reconciled": 345,
+  "incorrect_reconciliations": 71,
+  "exception_detection": {
+    "amount_mismatch": {
+      "actual": 37,
+      "correctly_detected": 0,
+      "detection_rate": 0.0
+    },
+    "duplicate_settlement": {
+      "actual": 20,
+      "correctly_detected": 19,
+      "detection_rate": 95.0
+    },
+    "missing_settlement": {
+      "actual": 67,
+      "correctly_detected": 0,
+      "detection_rate": 0.0
+    },
+    "settlement_delay": {
+      "actual": 18,
+      "correctly_detected": 16,
+      "detection_rate": 88.89
+    }
+  },
+  "batch_id": "BATCH-A9191067",
+  "batch_name": "fineobs_benchmark_001"
+}
